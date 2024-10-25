@@ -877,7 +877,9 @@ after_chain:
 		verify_mode |= SSL_VERIFY_FAIL_IF_NO_PEER_CERT;
 		verify_mode |= SSL_VERIFY_CLIENT_ONCE;
 	}
-	SSL_set_verify(state->ssl, verify_mode, cbtls_verify);
+    //cyfcyf
+//	SSL_set_verify(state->ssl, verify_mode, cbtls_verify);
+	SSL_set_verify(state->ssl, verify_mode, NULL);
 
 	SSL_set_ex_data(state->ssl, FR_TLS_EX_INDEX_CONF, (void *)conf);
 	SSL_set_ex_data(state->ssl, FR_TLS_EX_INDEX_SSN, (void *)state);
@@ -1276,6 +1278,13 @@ void tls_session_information(tls_session_t *tls_session)
 		str_version = "TLS 1.3 ";
 		break;
 #endif
+#ifdef NTLS_VERSION
+    case NTLS_VERSION:
+        str_version = "TLCP 1.0 ";
+        break;
+#endif
+
+
 
 	default:
 		sprintf(buffer, "UNKNOWN TLS VERSION '%04X'", SSL_version(tls_session->ssl));
@@ -3755,6 +3764,106 @@ static const FR_NAME_NUMBER version2int[] = {
 #endif
 #endif
 
+//cyfcyf
+struct L2_ext_data {
+     unsigned char *data;
+     size_t data_len;
+};
+
+static int server_add_cb(SSL *s, unsigned int ext_type, unsigned int context,
+                      const unsigned char **out, size_t *outlen, X509 *x,
+                      size_t chainidx, int *al, void *add_arg) {
+
+    struct L2_ext_data *ext_data = SSL_get_app_data(s);
+    if (ext_data && ext_data->data && ext_data->data_len > 0) {
+        *out = ext_data->data;
+        *outlen = ext_data->data_len;
+         printf("Adding custom extension to ServerHello: ext_type = %u, data length = %zu\n", ext_type, *outlen);
+    }
+
+
+//    printf("in sever ************************cyfcyf\n");
+//    unsigned char *p_data = NULL;
+//    p_data = OPENSSL_malloc(sizeof(*p_data));
+//    if (p_data == NULL) {
+//        return 0;
+//    }
+//    *p_data = 88;
+//    *out = p_data;
+//    *outlen = sizeof(*p_data);
+
+    return 1;
+}
+
+static int server_parse_cb(SSL *s, unsigned int ext_type, unsigned int context, const unsigned char *in, size_t inlen, X509 *x, size_t chainidx, int *al, void *parse_arg)
+{
+    printf("in server ext_parse_cb\n");
+    return 1;
+}
+static void server_free_cb(SSL *s,
+                        unsigned int ext_type,
+                        unsigned int context,
+                        const unsigned char *out,
+                        void *add_arg)
+{
+
+    struct L2_ext_data *ext_data = SSL_get_app_data(s);
+    if (ext_data) {
+        free(ext_data->data);
+        free(ext_data);
+    }
+    printf("in ext_free_cb\n");
+
+}
+
+//  2 way to parse L2_ext_data
+//static int client_hello_callback(SSL *s, int *al, void *arg) {
+//    const unsigned char *ext;
+//    size_t ext_len;
+//
+//    if (SSL_client_hello_get0_ext(s, 65280, &ext, &ext_len) == 1) {
+//        printf("extension: %s\n", ext);
+//
+//        unsigned char ext_data[100];
+//        memcpy(ext_data, ext, ext_len);
+//        printf("ext_data: %s\n", ext_data);
+//
+//
+//        return 1;
+//
+//    } else {
+//        printf("extension no found\n");
+//        *al = 1;
+//        return 0;
+//    }
+//}
+
+static int
+ext_parse_cb(SSL *s, unsigned int ext_type, unsigned int context,
+             const unsigned char *in, size_t inlen, X509 *x,
+             size_t chainidx, int *al, void *parse_arg)
+{
+    printf("Received custom extension from client: ext_type = %u, data length = %zu\n", ext_type, inlen);
+
+    struct L2_ext_data* ext_data = OPENSSL_malloc(sizeof(struct L2_ext_data));
+    if (!ext_data) {
+        *al = SSL_AD_INTERNAL_ERROR;
+        return -1;
+    }
+    ext_data->data = OPENSSL_malloc(inlen);
+    if (!ext_data->data) {
+        OPENSSL_free(ext_data);
+        *al = SSL_AD_INTERNAL_ERROR;
+        return -1;
+    }
+    memcpy(ext_data->data, in, inlen);
+    ext_data->data_len = inlen;
+    // 将扩展数据存储在 SSL 连接的应用数据中
+    SSL_set_app_data(s, ext_data);
+    return 1;
+}
+
+
 /** Create SSL context
  *
  * - Load the trusted CAs
@@ -3783,11 +3892,61 @@ SSL_CTX *tls_init_ctx(fr_tls_server_conf_t *conf, int client, char const *chain_
 	EVP_add_digest(EVP_sha256());
 #endif
 
-	ctx = SSL_CTX_new(SSLv23_method()); /* which is really "all known SSL / TLS methods".  Idiots. */
-	if (!ctx) {
+    //cyfcyf
+    const char *sign_key_file = "/home/cyf/tongsuo-test/sm2/server_sign.key";
+    const char *sign_cert_file = "/home/cyf/tongsuo-test/sm2/server_sign.crt";
+    const char *enc_key_file = "/home/cyf/tongsuo-test/sm2/server_enc.key";
+    const char *enc_cert_file = "/home/cyf/tongsuo-test/sm2/server_enc.crt";
+    const SSL_METHOD *meth = NULL;
+
+        //双证书相关server的各种定义
+    meth = NTLS_server_method();
+    //生成上下文
+    ctx = SSL_CTX_new(meth);
+    if (!ctx) {
 		tls_error_log(NULL, "Failed creating OpenSSL context");
 		return NULL;
 	}
+
+    //client hello  server hello 扩展
+    SSL_CTX_add_custom_ext(ctx,
+                           65280, // 自定义扩展类型
+                           SSL_EXT_CLIENT_HELLO|SSL_EXT_TLS1_2_SERVER_HELLO|SSL_EXT_TLS1_3_SERVER_HELLO,
+                           server_add_cb,
+                           server_free_cb,
+                           NULL,
+                           ext_parse_cb,
+                           ctx
+                           ); // 如果不需要接收回调，可以传 NULL
+
+   // SSL_CTX_set_client_hello_cb(ctx, client_hello_callback, ctx);
+
+
+
+
+    //允许使用国密双证书功能
+    SSL_CTX_enable_ntls(ctx);
+
+    //加载签名证书，加密证书
+    if (!SSL_CTX_use_sign_certificate_file(ctx, sign_cert_file,
+                                           SSL_FILETYPE_PEM)
+        || !SSL_CTX_use_sign_PrivateKey_file(ctx, sign_key_file,
+                                             SSL_FILETYPE_PEM)
+	    || !SSL_CTX_use_enc_certificate_file(ctx, enc_cert_file,
+                                              SSL_FILETYPE_PEM)
+	    || !SSL_CTX_use_enc_PrivateKey_file(ctx, enc_key_file,
+                                             SSL_FILETYPE_PEM)) {
+        ERR_print_errors_fp(stderr);
+        return NULL;
+    }
+
+
+
+//	ctx = SSL_CTX_new(SSLv23_method()); /* which is really "all known SSL / TLS methods".  Idiots. */
+//	if (!ctx) {
+//		tls_error_log(NULL, "Failed creating OpenSSL context");
+//		return NULL;
+//	}
 
 	/*
 	 * Save the config on the context so that callbacks which
@@ -4288,16 +4447,16 @@ post_ca:
 	}
 
 	ctx_options &= ~(ctx_available); /* clear these flags, as they're not needed. */
+//cyfcyf
+//	if (!SSL_CTX_set_max_proto_version(ctx, max_version)) {
+//		ERROR("Failed setting TLS maximum version");
+//		return NULL;
+//	}
 
-	if (!SSL_CTX_set_max_proto_version(ctx, max_version)) {
-		ERROR("Failed setting TLS maximum version");
-		return NULL;
-	}
-
-	if (!SSL_CTX_set_min_proto_version(ctx, min_version)) {
-		ERROR("Failed setting TLS minimum version");
-		return NULL;
-	}
+//	if (!SSL_CTX_set_min_proto_version(ctx, min_version)) {
+//		ERROR("Failed setting TLS minimum version");
+//		return NULL;
+//	}
 #endif	/* OpenSSL version < 1.1.0 */
 
 	if ((ctx_options & ctx_available) == ctx_available) {
@@ -4462,7 +4621,9 @@ post_ca:
 	verify_mode |= SSL_VERIFY_PEER;
 	verify_mode |= SSL_VERIFY_FAIL_IF_NO_PEER_CERT;
 	verify_mode |= SSL_VERIFY_CLIENT_ONCE;
-	SSL_CTX_set_verify(ctx, verify_mode, cbtls_verify);
+    //cyf
+	//SSL_CTX_set_verify(ctx, verify_mode, cbtls_verify);
+    SSL_CTX_set_verify(ctx, verify_mode, NULL);
 
 	if (conf->verify_depth) {
 		SSL_CTX_set_verify_depth(ctx, conf->verify_depth);

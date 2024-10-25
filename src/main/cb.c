@@ -70,6 +70,9 @@ void cbtls_info(SSL const *s, int where, int ret)
 				int num_ciphers;
 				const SSL_CIPHER *this_cipher;
 
+                //cyfcyf 套件匹配
+
+
 			report_ciphers:
 				server_ciphers = SSL_get_ciphers(s);
 				if (server_ciphers) {
