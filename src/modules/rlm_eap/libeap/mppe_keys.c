@@ -28,6 +28,7 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #include "eap_tls.h"
 #include <openssl/ssl.h>
 #include <openssl/hmac.h>
+#include <openssl/sgd.h>
 #include <freeradius-devel/openssl3.h>
 
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
@@ -208,6 +209,152 @@ void T_PRF(unsigned char const *secret, unsigned int secret_len,
 }
 
 #define EAPTLS_MPPE_KEY_LEN     32
+#define EAPTLS_L2_KEY_LEN 16
+
+
+
+
+int tls1_export_keying_material(SSL *s, unsigned char *out, size_t olen,
+                                const char *label, size_t llen,
+                                const unsigned char *context,
+                                size_t contextlen, int use_context)
+{
+    unsigned char *val = NULL;
+    size_t vallen = 0;
+    size_t currentvalpos = 0;
+    int rv;
+
+
+    unsigned char client_random[1000] = {0};  // 最大长度取决于加密算法
+    memset (client_random, 0x00, 1000);
+    size_t client_random_size = SSL_get_client_random(s, client_random,1000);
+    unsigned char server_random[1000] = {0};  // 最大长度取决于加密算法
+    memset (server_random, 0x00, 1000);
+    size_t server_random_size = SSL_get_server_random(s, server_random,1000);
+
+
+    /*
+     * construct PRF arguments we construct the PRF argument ourself rather
+     * than passing separate values into the TLS PRF to ensure that the
+     * concatenation of values does not create a prohibited label.
+     */
+    vallen = llen + SSL3_RANDOM_SIZE * 2;
+    if (use_context) {
+        vallen += 2 + contextlen;
+    }
+
+    val = OPENSSL_malloc(vallen);
+    if (val == NULL)
+        goto err2;
+    currentvalpos = 0;
+    memcpy(val + currentvalpos, (unsigned char *)label, llen);
+    currentvalpos += llen;
+    memcpy(val + currentvalpos, client_random, SSL3_RANDOM_SIZE);
+    currentvalpos += SSL3_RANDOM_SIZE;
+    memcpy(val + currentvalpos, server_random, SSL3_RANDOM_SIZE);
+    currentvalpos += SSL3_RANDOM_SIZE;
+
+    if (use_context) {
+        val[currentvalpos] = (contextlen >> 8) & 0xff;
+        currentvalpos++;
+        val[currentvalpos] = contextlen & 0xff;
+        currentvalpos++;
+        if ((contextlen > 0) || (context != NULL)) {
+            memcpy(val + currentvalpos, context, contextlen);
+        }
+    }
+
+    /*
+     * disallow prohibited labels note that SSL3_RANDOM_SIZE > max(prohibited
+     * label len) = 15, so size of val > max(prohibited label len) = 15 and
+     * the comparisons won't have buffer overflow
+     */
+    if (memcmp(val, TLS_MD_CLIENT_FINISH_CONST,
+               TLS_MD_CLIENT_FINISH_CONST_SIZE) == 0)
+        goto err1;
+    if (memcmp(val, TLS_MD_SERVER_FINISH_CONST,
+               TLS_MD_SERVER_FINISH_CONST_SIZE) == 0)
+        goto err1;
+    if (memcmp(val, TLS_MD_MASTER_SECRET_CONST,
+               TLS_MD_MASTER_SECRET_CONST_SIZE) == 0)
+        goto err1;
+    if (memcmp(val, TLS_MD_EXTENDED_MASTER_SECRET_CONST,
+               TLS_MD_EXTENDED_MASTER_SECRET_CONST_SIZE) == 0)
+        goto err1;
+    if (memcmp(val, TLS_MD_KEY_EXPANSION_CONST,
+               TLS_MD_KEY_EXPANSION_CONST_SIZE) == 0)
+        goto err1;
+
+    SSL_SESSION *session = SSL_get_session(s);
+    unsigned char master_key[1000] = {0};  // 最大长度取决于加密算法
+    memset (master_key, 0x00, 1000);
+    size_t master_key_length = SSL_SESSION_get_master_key(session, master_key, sizeof(master_key));
+    if (master_key_length > 0) {
+        DEBUG2("master key : %s",master_key ) ;
+    }
+
+
+//    rv = tls1_PRF(s,
+//                  val, vallen,
+//                  NULL, 0,
+//                  NULL, 0,
+//                  NULL, 0,
+//                  NULL, 0,
+//                  master_key, master_key_length,
+//                  out, olen, 0);
+
+    goto ret;
+    err1:
+    ERR_raise(ERR_LIB_SSL, SSL_R_TLS_ILLEGAL_EXPORTER_LABEL);
+    rv = 0;
+    goto ret;
+    err2:
+    ERR_raise(ERR_LIB_SSL, ERR_R_MALLOC_FAILURE);
+    rv = 0;
+    ret:
+    OPENSSL_clear_free(val, vallen);
+    return rv;
+}
+
+static unsigned char* sm4_cbc(unsigned char* key, size_t key_len,
+                              unsigned char* iv,
+                              unsigned char* in, size_t in_len,
+                              size_t *out_len) {
+
+    unsigned char *out = OPENSSL_malloc(in_len * 2);
+    size_t outlen = 0;
+    size_t tmp_len = 0;
+    *out_len = 0;
+
+    EVP_CIPHER_CTX *sm4_ctx =  EVP_CIPHER_CTX_new();
+    if (sm4_ctx == NULL) {
+      return 0;
+    }
+    const EVP_CIPHER *cipher = EVP_sm4_cbc();
+
+    if (!EVP_CipherInit_ex(sm4_ctx, cipher, NULL, key, iv, 1)
+        || !EVP_CIPHER_CTX_set_padding(sm4_ctx, 0)) {
+        return 0;
+    }
+
+    if (!EVP_EncryptUpdate(sm4_ctx, out, (int *)&tmp_len, in, in_len)) {
+        /* 错误处理 */
+        EVP_CIPHER_CTX_free(sm4_ctx);
+        return 0;
+    }
+    outlen = tmp_len;
+
+    if (!EVP_EncryptFinal_ex(sm4_ctx, out + tmp_len, (int *)&tmp_len)) {
+        EVP_CIPHER_CTX_free(sm4_ctx);
+        return 0;
+    }
+
+    outlen += tmp_len;
+    EVP_CIPHER_CTX_free(sm4_ctx);
+    *out_len = outlen;
+    return out;
+
+}
 
 /*
  *	Generate keys according to RFC 2716 and add to reply
@@ -220,12 +367,39 @@ void eaptls_gen_mppe_keys(REQUEST *request, SSL *s, char const *label, uint8_t c
 
 	len = strlen(label);
 
-#if OPENSSL_VERSION_NUMBER >= 0x10001000L
-	if (SSL_export_keying_material(s, out, sizeof(out), label, len, context, context_size, context != NULL) != 1) {
-		ERROR("Failed generating keying material");
-		return;
-	}
-#else
+    SSL_SESSION *session = SSL_get_session(s);
+    unsigned char master_key[1000] = {0};  // 最大长度取决于加密算法
+    memset (master_key, 0x00, 1000);
+    size_t master_key_length = SSL_SESSION_get_master_key(session, master_key, sizeof(master_key));
+    if (master_key_length > 0) {
+        DEBUG2("master key : %s",master_key ) ;
+    }
+
+
+//#if OPENSSL_VERSION_NUMBER >= 0x10001000L
+//    if (tls1_export_keying_material(s, out, sizeof(out), label, len, context, context_size, context != NULL) != 1) {
+//        ERROR("Failed generating keying material");
+//        return;
+//    }
+//    if (SSL_export_keying_material(s, out, sizeof(out), label, len, context, context_size, context != NULL) != 1) {
+//        ERROR("Failed generating keying material");
+//        return;
+//    }
+
+//	if (SSL_export_keying_material(s, out, sizeof(out), label, len, NULL, 0, 0) != 1) {
+//        ERROR("Failed generating keying material");
+//		return;
+//	}
+
+
+//#else
+    unsigned char client_random[1000] = {0};  // 最大长度取决于加密算法
+    memset (client_random, 0x00, 1000);
+    size_t client_random_size = SSL_get_client_random(s, client_random,1000);
+    unsigned char server_random[1000] = {0};  // 最大长度取决于加密算法
+    memset (server_random, 0x00, 1000);
+    size_t server_random_size = SSL_get_server_random(s, server_random,1000);
+
 	{
 		uint8_t seed[64 + (2 * SSL3_RANDOM_SIZE) + (context ? 2 + context_size : 0)];
 		uint8_t buf[4 * EAPTLS_MPPE_KEY_LEN];
@@ -235,11 +409,11 @@ void eaptls_gen_mppe_keys(REQUEST *request, SSL *s, char const *label, uint8_t c
 		memcpy(p, label, len);
 		p += len;
 
-		memcpy(p, s->s3->client_random, SSL3_RANDOM_SIZE);
+		memcpy(p, client_random, SSL3_RANDOM_SIZE);
 		p += SSL3_RANDOM_SIZE;
 		len += SSL3_RANDOM_SIZE;
 
-		memcpy(p, s->s3->server_random, SSL3_RANDOM_SIZE);
+		memcpy(p, server_random, SSL3_RANDOM_SIZE);
 		p += SSL3_RANDOM_SIZE;
 		len += SSL3_RANDOM_SIZE;
 
@@ -254,18 +428,52 @@ void eaptls_gen_mppe_keys(REQUEST *request, SSL *s, char const *label, uint8_t c
 			len += context_size;
 		}
 
-		PRF(s->session->master_key, s->session->master_key_length,
-		    seed, len, out, buf, sizeof(out));
+		PRF(master_key, master_key_length,
+		    seed, len, out, sizeof(out));
 	}
-#endif
-
+//#endif
+    int out_len = sizeof(out);
 	p = out;
-	eap_add_reply(request, "MS-MPPE-Recv-Key", p, EAPTLS_MPPE_KEY_LEN);
-	p += EAPTLS_MPPE_KEY_LEN;
-	eap_add_reply(request, "MS-MPPE-Send-Key", p, EAPTLS_MPPE_KEY_LEN);
 
-	eap_add_reply(request, "EAP-MSK", out, 64);
-	eap_add_reply(request, "EAP-EMSK", out + 64, 64);
+    //封装avp
+    unsigned char random_iv[EAPTLS_L2_KEY_LEN];
+    RAND_bytes(random_iv, EAPTLS_L2_KEY_LEN);
+    unsigned char *sm4_key_send = NULL;
+    unsigned char *sm4_key_recv = NULL;
+    size_t outlen;
+    char* secret_key = request->client->secret;
+    unsigned char  md_key[32] = {0};
+    size_t mdlen = 0;
+
+    if (!EVP_Q_digest(NULL, "SM3", NULL, secret_key, strlen(secret_key), md_key, &mdlen)) {
+        /* 错误处理 */
+        return;
+    }
+
+
+    pair_make_reply("Trans-Encryption-Way", "SM4-128-CBC", T_OP_SET); /*proxy unroutable*/
+    eap_add_reply(request, "Trans-Encryption-Iv", random_iv, EAPTLS_L2_KEY_LEN);
+
+    sm4_key_send =  sm4_cbc(md_key, EAPTLS_L2_KEY_LEN, random_iv, p, EAPTLS_L2_KEY_LEN, &outlen);
+
+    p += EAPTLS_L2_KEY_LEN;
+    sm4_key_recv =  sm4_cbc(md_key, EAPTLS_L2_KEY_LEN, random_iv, p, EAPTLS_L2_KEY_LEN, &outlen);
+
+    p += EAPTLS_L2_KEY_LEN;
+
+    eap_add_reply(request, "L2-Encryption-Key-Send", sm4_key_send, EAPTLS_L2_KEY_LEN);
+    eap_add_reply(request, "L2-Encryption-Key-Recv", sm4_key_recv, EAPTLS_L2_KEY_LEN);
+    eap_add_reply(request, "L2-Encryption-Iv-Send", p, EAPTLS_L2_KEY_LEN);
+    p += EAPTLS_L2_KEY_LEN;
+    eap_add_reply(request, "L2-Encryption-Iv-Recv", p, EAPTLS_L2_KEY_LEN);
+
+
+//	eap_add_reply(request, "L2-Encryption-Key-Send", p, EAPTLS_MPPE_KEY_LEN);
+//	p += EAPTLS_MPPE_KEY_LEN;
+//	eap_add_reply(request, "MS-MPPE-Send-Key", p, EAPTLS_MPPE_KEY_LEN);
+//
+//	eap_add_reply(request, "EAP-MSK", out, 64);
+//	eap_add_reply(request, "EAP-EMSK", out + 64, 64);
 }
 
 
@@ -328,6 +536,7 @@ void eaptls_gen_eap_key(eap_handler_t *handler)
 	case TLS1_VERSION:
 	case TLS1_1_VERSION:
 	case TLS1_2_VERSION:
+    case NTLS_VERSION:
 		SSL_get_client_random(s, p, SSL3_RANDOM_SIZE);
 		p += SSL3_RANDOM_SIZE;
 		SSL_get_server_random(s, p, SSL3_RANDOM_SIZE);

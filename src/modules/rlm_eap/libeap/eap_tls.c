@@ -178,10 +178,10 @@ int eaptls_success(eap_handler_t *handler, int peap_flag)
 #endif
         //cyfcyf
         case NTLS_VERSION:
-            context = context_tls13;
-            context_size = sizeof(context_tls13);
-            tls_session->label = "EXPORTER_EAP_TLS_Key_Material";
-            break;
+            //context = context_tls13;
+            //context_size = sizeof(context_tls13);
+            //tls_session->label = "EXPORTER_EAP_TLS_Key_Material";
+           // break;
 		case TLS1_2_VERSION:
 		case TLS1_1_VERSION:
 		case TLS1_VERSION:
