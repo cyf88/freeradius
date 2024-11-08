@@ -212,110 +212,6 @@ void T_PRF(unsigned char const *secret, unsigned int secret_len,
 #define EAPTLS_L2_KEY_LEN 16
 
 
-
-
-int tls1_export_keying_material(SSL *s, unsigned char *out, size_t olen,
-                                const char *label, size_t llen,
-                                const unsigned char *context,
-                                size_t contextlen, int use_context)
-{
-    unsigned char *val = NULL;
-    size_t vallen = 0;
-    size_t currentvalpos = 0;
-    int rv;
-
-
-    unsigned char client_random[1000] = {0};  // 最大长度取决于加密算法
-    memset (client_random, 0x00, 1000);
-    size_t client_random_size = SSL_get_client_random(s, client_random,1000);
-    unsigned char server_random[1000] = {0};  // 最大长度取决于加密算法
-    memset (server_random, 0x00, 1000);
-    size_t server_random_size = SSL_get_server_random(s, server_random,1000);
-
-
-    /*
-     * construct PRF arguments we construct the PRF argument ourself rather
-     * than passing separate values into the TLS PRF to ensure that the
-     * concatenation of values does not create a prohibited label.
-     */
-    vallen = llen + SSL3_RANDOM_SIZE * 2;
-    if (use_context) {
-        vallen += 2 + contextlen;
-    }
-
-    val = OPENSSL_malloc(vallen);
-    if (val == NULL)
-        goto err2;
-    currentvalpos = 0;
-    memcpy(val + currentvalpos, (unsigned char *)label, llen);
-    currentvalpos += llen;
-    memcpy(val + currentvalpos, client_random, SSL3_RANDOM_SIZE);
-    currentvalpos += SSL3_RANDOM_SIZE;
-    memcpy(val + currentvalpos, server_random, SSL3_RANDOM_SIZE);
-    currentvalpos += SSL3_RANDOM_SIZE;
-
-    if (use_context) {
-        val[currentvalpos] = (contextlen >> 8) & 0xff;
-        currentvalpos++;
-        val[currentvalpos] = contextlen & 0xff;
-        currentvalpos++;
-        if ((contextlen > 0) || (context != NULL)) {
-            memcpy(val + currentvalpos, context, contextlen);
-        }
-    }
-
-    /*
-     * disallow prohibited labels note that SSL3_RANDOM_SIZE > max(prohibited
-     * label len) = 15, so size of val > max(prohibited label len) = 15 and
-     * the comparisons won't have buffer overflow
-     */
-    if (memcmp(val, TLS_MD_CLIENT_FINISH_CONST,
-               TLS_MD_CLIENT_FINISH_CONST_SIZE) == 0)
-        goto err1;
-    if (memcmp(val, TLS_MD_SERVER_FINISH_CONST,
-               TLS_MD_SERVER_FINISH_CONST_SIZE) == 0)
-        goto err1;
-    if (memcmp(val, TLS_MD_MASTER_SECRET_CONST,
-               TLS_MD_MASTER_SECRET_CONST_SIZE) == 0)
-        goto err1;
-    if (memcmp(val, TLS_MD_EXTENDED_MASTER_SECRET_CONST,
-               TLS_MD_EXTENDED_MASTER_SECRET_CONST_SIZE) == 0)
-        goto err1;
-    if (memcmp(val, TLS_MD_KEY_EXPANSION_CONST,
-               TLS_MD_KEY_EXPANSION_CONST_SIZE) == 0)
-        goto err1;
-
-    SSL_SESSION *session = SSL_get_session(s);
-    unsigned char master_key[1000] = {0};  // 最大长度取决于加密算法
-    memset (master_key, 0x00, 1000);
-    size_t master_key_length = SSL_SESSION_get_master_key(session, master_key, sizeof(master_key));
-    if (master_key_length > 0) {
-        DEBUG2("master key : %s",master_key ) ;
-    }
-
-
-//    rv = tls1_PRF(s,
-//                  val, vallen,
-//                  NULL, 0,
-//                  NULL, 0,
-//                  NULL, 0,
-//                  NULL, 0,
-//                  master_key, master_key_length,
-//                  out, olen, 0);
-
-    goto ret;
-    err1:
-    ERR_raise(ERR_LIB_SSL, SSL_R_TLS_ILLEGAL_EXPORTER_LABEL);
-    rv = 0;
-    goto ret;
-    err2:
-    ERR_raise(ERR_LIB_SSL, ERR_R_MALLOC_FAILURE);
-    rv = 0;
-    ret:
-    OPENSSL_clear_free(val, vallen);
-    return rv;
-}
-
 static unsigned char* sm4_cbc(unsigned char* key, size_t key_len,
                               unsigned char* iv,
                               unsigned char* in, size_t in_len,
@@ -367,71 +263,61 @@ void eaptls_gen_mppe_keys(REQUEST *request, SSL *s, char const *label, uint8_t c
 
 	len = strlen(label);
 
-    SSL_SESSION *session = SSL_get_session(s);
-    unsigned char master_key[1000] = {0};  // 最大长度取决于加密算法
-    memset (master_key, 0x00, 1000);
-    size_t master_key_length = SSL_SESSION_get_master_key(session, master_key, sizeof(master_key));
-    if (master_key_length > 0) {
-        DEBUG2("master key : %s",master_key ) ;
+#if OPENSSL_VERSION_NUMBER >= 0x10001000L
+
+    if (SSL_export_keying_material(s, out, sizeof(out), label, strlen(label), context, context_size, context != NULL) != 1) {
+        ERROR("Failed generating keying material");
+        return;
     }
 
+#else
 
-//#if OPENSSL_VERSION_NUMBER >= 0x10001000L
-//    if (tls1_export_keying_material(s, out, sizeof(out), label, len, context, context_size, context != NULL) != 1) {
-//        ERROR("Failed generating keying material");
-//        return;
+//    SSL_SESSION *session = SSL_get_session(s);
+//    unsigned char master_key[1000] = {0};  // 最大长度取决于加密算法
+//    memset (master_key, 0x00, 1000);
+//    size_t master_key_length = SSL_SESSION_get_master_key(session, master_key, sizeof(master_key));
+//    if (master_key_length > 0) {
+//        DEBUG2("master key : %s",master_key ) ;
 //    }
-//    if (SSL_export_keying_material(s, out, sizeof(out), label, len, context, context_size, context != NULL) != 1) {
-//        ERROR("Failed generating keying material");
-//        return;
-//    }
-
-//	if (SSL_export_keying_material(s, out, sizeof(out), label, len, NULL, 0, 0) != 1) {
-//        ERROR("Failed generating keying material");
-//		return;
+//    unsigned char client_random[1000] = {0};  // 最大长度取决于加密算法
+//    memset (client_random, 0x00, 1000);
+//    size_t client_random_size = SSL_get_client_random(s, client_random,1000);
+//    unsigned char server_random[1000] = {0};  // 最大长度取决于加密算法
+//    memset (server_random, 0x00, 1000);
+//    size_t server_random_size = SSL_get_server_random(s, server_random,1000);
+//
+//	{
+//		uint8_t seed[64 + (2 * SSL3_RANDOM_SIZE) + (context ? 2 + context_size : 0)];
+//		uint8_t buf[4 * EAPTLS_MPPE_KEY_LEN];
+//
+//		p = seed;
+//
+//		memcpy(p, label, len);
+//		p += len;
+//
+//		memcpy(p, client_random, SSL3_RANDOM_SIZE);
+//		p += SSL3_RANDOM_SIZE;
+//		len += SSL3_RANDOM_SIZE;
+//
+//		memcpy(p, server_random, SSL3_RANDOM_SIZE);
+//		p += SSL3_RANDOM_SIZE;
+//		len += SSL3_RANDOM_SIZE;
+//
+//		if (context) {
+//			/* cloned and reversed FR_PUT_LE16 */
+//			p[0] = ((uint16_t) (context_size)) >> 8;
+//			p[1] = ((uint16_t) (context_size)) & 0xff;
+//			p += 2;
+//			len += 2;
+//			memcpy(p, context, context_size);
+//			p += context_size;
+//			len += context_size;
+//		}
+//
+//		PRF(master_key, master_key_length,
+//		    seed, len, out, sizeof(out));
 //	}
-
-
-//#else
-    unsigned char client_random[1000] = {0};  // 最大长度取决于加密算法
-    memset (client_random, 0x00, 1000);
-    size_t client_random_size = SSL_get_client_random(s, client_random,1000);
-    unsigned char server_random[1000] = {0};  // 最大长度取决于加密算法
-    memset (server_random, 0x00, 1000);
-    size_t server_random_size = SSL_get_server_random(s, server_random,1000);
-
-	{
-		uint8_t seed[64 + (2 * SSL3_RANDOM_SIZE) + (context ? 2 + context_size : 0)];
-		uint8_t buf[4 * EAPTLS_MPPE_KEY_LEN];
-
-		p = seed;
-
-		memcpy(p, label, len);
-		p += len;
-
-		memcpy(p, client_random, SSL3_RANDOM_SIZE);
-		p += SSL3_RANDOM_SIZE;
-		len += SSL3_RANDOM_SIZE;
-
-		memcpy(p, server_random, SSL3_RANDOM_SIZE);
-		p += SSL3_RANDOM_SIZE;
-		len += SSL3_RANDOM_SIZE;
-
-		if (context) {
-			/* cloned and reversed FR_PUT_LE16 */
-			p[0] = ((uint16_t) (context_size)) >> 8;
-			p[1] = ((uint16_t) (context_size)) & 0xff;
-			p += 2;
-			len += 2;
-			memcpy(p, context, context_size);
-			p += context_size;
-			len += context_size;
-		}
-
-		PRF(master_key, master_key_length,
-		    seed, len, out, sizeof(out));
-	}
-//#endif
+#endif
     int out_len = sizeof(out);
 	p = out;
 
