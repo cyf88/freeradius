@@ -705,6 +705,8 @@ tls_session_t *tls_new_session(TALLOC_CTX *ctx, fr_tls_server_conf_t *conf, REQU
 		pthread_mutex_unlock(&conf->mutex);
 	}
 
+    //根据信令类型加载不同的ca
+
 	new_tls = SSL_new(conf->ctx);
 	if (new_tls == NULL) {
 		tls_error_log(request, "Error creating new TLS session");
@@ -3899,14 +3901,24 @@ SSL_CTX *tls_init_ctx(fr_tls_server_conf_t *conf, int client, char const *chain_
     const char *enc_cert_file = "/home/cyf/tongsuo-test/sm2/server_enc.crt";
     const SSL_METHOD *meth = NULL;
 
-        //双证书相关server的各种定义
-    meth = NTLS_server_method();
-    //生成上下文
-    ctx = SSL_CTX_new(meth);
-    if (!ctx) {
+    //双证书相关server的各种定义
+    //meth = NTLS_server_method();
+        //生成上下文
+//    ctx = SSL_CTX_new(meth);
+//    if (!ctx) {
+//		tls_error_log(NULL, "Failed creating OpenSSL context");
+//		return NULL;
+//	}
+
+    ctx = SSL_CTX_new(SSLv23_method()); /* which is really "all known SSL / TLS methods".  Idiots. */
+	if (!ctx) {
 		tls_error_log(NULL, "Failed creating OpenSSL context");
 		return NULL;
 	}
+
+    //允许使用国密双证书功能
+    SSL_CTX_enable_ntls(ctx);
+
 
     //client hello  server hello 扩展
     SSL_CTX_add_custom_ext(ctx,
@@ -3921,13 +3933,7 @@ SSL_CTX *tls_init_ctx(fr_tls_server_conf_t *conf, int client, char const *chain_
 
    // SSL_CTX_set_client_hello_cb(ctx, client_hello_callback, ctx);
 
-
-
-
-    //允许使用国密双证书功能
-    SSL_CTX_enable_ntls(ctx);
-
-    //加载签名证书，加密证书
+    //加载国密签名证书，加密证书
     if (!SSL_CTX_use_sign_certificate_file(ctx, sign_cert_file,
                                            SSL_FILETYPE_PEM)
         || !SSL_CTX_use_sign_PrivateKey_file(ctx, sign_key_file,
@@ -3941,12 +3947,6 @@ SSL_CTX *tls_init_ctx(fr_tls_server_conf_t *conf, int client, char const *chain_
     }
 
 
-
-//	ctx = SSL_CTX_new(SSLv23_method()); /* which is really "all known SSL / TLS methods".  Idiots. */
-//	if (!ctx) {
-//		tls_error_log(NULL, "Failed creating OpenSSL context");
-//		return NULL;
-//	}
 
 	/*
 	 * Save the config on the context so that callbacks which
