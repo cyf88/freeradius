@@ -705,8 +705,6 @@ tls_session_t *tls_new_session(TALLOC_CTX *ctx, fr_tls_server_conf_t *conf, REQU
 		pthread_mutex_unlock(&conf->mutex);
 	}
 
-    //根据信令类型加载不同的ca
-
 	new_tls = SSL_new(conf->ctx);
 	if (new_tls == NULL) {
 		tls_error_log(request, "Error creating new TLS session");
@@ -1642,6 +1640,10 @@ static CONF_PARSER tls_server_config[] = {
 	{ "pem_file_type", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, file_type), "yes" },
 	{ "private_key_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, fr_tls_server_conf_t, private_key_file), NULL },
 	{ "certificate_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, fr_tls_server_conf_t, certificate_file), NULL },
+    { "sm2_enc_key_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, fr_tls_server_conf_t, sm2_enc_key_file), NULL },
+    { "sm2_sign_key_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, fr_tls_server_conf_t, sm2_sign_key_file), NULL },
+    { "sm2_enc_cert_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, fr_tls_server_conf_t, sm2_enc_cert_file), NULL },
+    { "sm2_sign_cert_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, fr_tls_server_conf_t, sm2_sign_cert_file), NULL },
 	{ "CA_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT | PW_TYPE_DEPRECATED, fr_tls_server_conf_t, ca_file), NULL },
 	{ "ca_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, fr_tls_server_conf_t, ca_file), NULL },
 	{ "private_key_password", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_SECRET, fr_tls_server_conf_t, private_key_password), NULL },
@@ -3895,20 +3897,11 @@ SSL_CTX *tls_init_ctx(fr_tls_server_conf_t *conf, int client, char const *chain_
 #endif
 
     //cyfcyf
-    const char *sign_key_file = "/home/cyf/tongsuo-test/sm2/server_sign.key";
-    const char *sign_cert_file = "/home/cyf/tongsuo-test/sm2/server_sign.crt";
-    const char *enc_key_file = "/home/cyf/tongsuo-test/sm2/server_enc.key";
-    const char *enc_cert_file = "/home/cyf/tongsuo-test/sm2/server_enc.crt";
-    const SSL_METHOD *meth = NULL;
-
-    //双证书相关server的各种定义
-    //meth = NTLS_server_method();
-        //生成上下文
-//    ctx = SSL_CTX_new(meth);
-//    if (!ctx) {
-//		tls_error_log(NULL, "Failed creating OpenSSL context");
-//		return NULL;
-//	}
+//    const char *sign_key_file = "/home/cyf/tongsuo-test/sm2/server_sign.key";
+//    const char *sign_cert_file = "/home/cyf/tongsuo-test/sm2/server_sign.crt";
+//    const char *enc_key_file = "/home/cyf/tongsuo-test/sm2/server_enc.key";
+//    const char *enc_cert_file = "/home/cyf/tongsuo-test/sm2/server_enc.crt";
+ //   const SSL_METHOD *meth = NULL;
 
     ctx = SSL_CTX_new(SSLv23_method()); /* which is really "all known SSL / TLS methods".  Idiots. */
 	if (!ctx) {
@@ -3918,7 +3911,6 @@ SSL_CTX *tls_init_ctx(fr_tls_server_conf_t *conf, int client, char const *chain_
 
     //允许使用国密双证书功能
     SSL_CTX_enable_ntls(ctx);
-
 
     //client hello  server hello 扩展
     SSL_CTX_add_custom_ext(ctx,
@@ -3933,18 +3925,22 @@ SSL_CTX *tls_init_ctx(fr_tls_server_conf_t *conf, int client, char const *chain_
 
    // SSL_CTX_set_client_hello_cb(ctx, client_hello_callback, ctx);
 
-    //加载国密签名证书，加密证书
-    if (!SSL_CTX_use_sign_certificate_file(ctx, sign_cert_file,
-                                           SSL_FILETYPE_PEM)
-        || !SSL_CTX_use_sign_PrivateKey_file(ctx, sign_key_file,
-                                             SSL_FILETYPE_PEM)
-	    || !SSL_CTX_use_enc_certificate_file(ctx, enc_cert_file,
-                                              SSL_FILETYPE_PEM)
-	    || !SSL_CTX_use_enc_PrivateKey_file(ctx, enc_key_file,
-                                             SSL_FILETYPE_PEM)) {
-        ERR_print_errors_fp(stderr);
-        return NULL;
-    }
+
+
+
+    //加载签名证书，加密证书
+//    if (!SSL_CTX_use_sign_certificate_file(ctx, sign_cert_file,
+//                                           SSL_FILETYPE_PEM)
+//        || !SSL_CTX_use_sign_PrivateKey_file(ctx, sign_key_file,
+//                                             SSL_FILETYPE_PEM)
+//	    || !SSL_CTX_use_enc_certificate_file(ctx, enc_cert_file,
+//                                              SSL_FILETYPE_PEM)
+//	    || !SSL_CTX_use_enc_PrivateKey_file(ctx, enc_key_file,
+//                                             SSL_FILETYPE_PEM)) {
+//        ERR_print_errors_fp(stderr);
+//        return NULL;
+//    }
+
 
 
 
@@ -3962,6 +3958,8 @@ SSL_CTX *tls_init_ctx(fr_tls_server_conf_t *conf, int client, char const *chain_
 	} else {
 		type = SSL_FILETYPE_ASN1;
 	}
+
+
 
 	/*
 	 * Set the password to load private key
@@ -4129,7 +4127,7 @@ SSL_CTX *tls_init_ctx(fr_tls_server_conf_t *conf, int client, char const *chain_
 #endif
 
 	/*
-	 *	Load our keys and certificates
+	 *	Load our keys and certificates (RSA)
 	 *
 	 *	If certificates are of type PEM then we can make use
 	 *	of cert chain authentication using openssl api call
@@ -4153,7 +4151,9 @@ SSL_CTX *tls_init_ctx(fr_tls_server_conf_t *conf, int client, char const *chain_
 		return NULL;
 	}
 
+
 load_ca:
+
 	/*
 	 *	Load the CAs we trust and configure CRL checks if needed
 	 */
@@ -4198,6 +4198,31 @@ load_ca:
 			return NULL;
 		}
 	}
+
+    /*
+     *  Load our keys and certificates (SM2)
+     *
+    */
+    if (type == SSL_FILETYPE_PEM) {
+            //加载签名证书，加密证书
+        if (!SSL_CTX_use_sign_certificate_file(ctx, conf->sm2_sign_cert_file,
+                                               SSL_FILETYPE_PEM)
+            || !SSL_CTX_use_sign_PrivateKey_file(ctx, conf->sm2_sign_key_file,
+                                                 SSL_FILETYPE_PEM)
+            || !SSL_CTX_use_enc_certificate_file(ctx, conf->sm2_enc_cert_file,
+                                                  SSL_FILETYPE_PEM)
+            || !SSL_CTX_use_enc_PrivateKey_file(ctx, conf->sm2_enc_key_file,
+                                                 SSL_FILETYPE_PEM)) {
+            ERR_print_errors_fp(stderr);
+            ERROR("Fail Load SM2  Certificates and Keys");
+            return NULL;
+        }
+
+    } else {
+         ERROR("Fail Load SM2  Certificates and Keys");
+    }
+
+
 
 #ifdef PSK_MAX_IDENTITY_LEN
 post_ca:

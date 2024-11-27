@@ -176,7 +176,14 @@ eap {
 	#
 	tls-config tls-common {
 		private_key_password = whatever
-		private_key_file = ${certdir}/server.pem
+		private_key_file = ${certdir}/rsa/server.pem
+		
+		  # SM2 Certificate_files
+        sm2_enc_key_file = ${certdir}/sm2/server_enc.key
+        sm2_sign_key_file = ${certdir}/sm2/server_sign.key
+        sm2_enc_cert_file = ${certdir}/sm2/server_enc.crt
+        sm2_sign_cert_file = ${certdir}/sm2/server_sign.crt
+
 
 		#  If Private key & Certificate are located in
 		#  the same file, then private_key_file &
@@ -212,7 +219,7 @@ eap {
 		#  give advice which will work everywhere.  Instead,
 		#  we give general guidelines.
 		#
-		certificate_file = ${certdir}/server.pem
+		certificate_file = ${certdir}/rsa/server.pem
 
 		#  Trusted Root CA list
 		#
