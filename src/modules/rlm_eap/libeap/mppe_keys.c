@@ -354,12 +354,13 @@ void eaptls_gen_mppe_keys(REQUEST *request, SSL *s, char const *label, uint8_t c
     eap_add_reply(request, "L2-Encryption-Iv-Recv", p, EAPTLS_L2_KEY_LEN);
 
 
-//	eap_add_reply(request, "L2-Encryption-Key-Send", p, EAPTLS_MPPE_KEY_LEN);
-//	p += EAPTLS_MPPE_KEY_LEN;
-//	eap_add_reply(request, "MS-MPPE-Send-Key", p, EAPTLS_MPPE_KEY_LEN);
-//
-//	eap_add_reply(request, "EAP-MSK", out, 64);
-//	eap_add_reply(request, "EAP-EMSK", out + 64, 64);
+    p = out;
+    eap_add_reply(request, "MS-MPPE-Recv-Key", p, EAPTLS_MPPE_KEY_LEN);
+    p += EAPTLS_MPPE_KEY_LEN;
+    eap_add_reply(request, "MS-MPPE-Send-Key", p, EAPTLS_MPPE_KEY_LEN);
+
+    eap_add_reply(request, "EAP-MSK", out, 64);
+    eap_add_reply(request, "EAP-EMSK", out + 64, 64);
 }
 
 

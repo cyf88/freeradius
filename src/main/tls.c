@@ -4646,9 +4646,9 @@ post_ca:
 	verify_mode |= SSL_VERIFY_PEER;
 	verify_mode |= SSL_VERIFY_FAIL_IF_NO_PEER_CERT;
 	verify_mode |= SSL_VERIFY_CLIENT_ONCE;
-    //cyf
-	//SSL_CTX_set_verify(ctx, verify_mode, cbtls_verify);
-    SSL_CTX_set_verify(ctx, verify_mode, NULL);
+    //cyfcyf
+    //SSL_CTX_set_cert_verify_callback(ctx, app_verify_callback, &app_verify_arg);
+	SSL_CTX_set_verify(ctx, verify_mode, cbtls_verify);
 
 	if (conf->verify_depth) {
 		SSL_CTX_set_verify_depth(ctx, conf->verify_depth);
